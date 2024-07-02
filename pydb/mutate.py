@@ -135,13 +135,13 @@ def get_response_from_sample(client: ConvexClient, sample: str | None = None):
     # Send an @gpt message with the sample message
     send_message(client, "Python pinger", f"@gpt {sample}")
 
-def scan_incompletes(client: ConvexClient):
-    count = client.mutation("messages:scanIncompletes")
+def scan_incompletes(client: ConvexClient) -> int:
+    count: int = client.mutation("messages:scanIncompletes")
     print(count, "incompletes found")
     return count
 
 def clear_table(client: ConvexClient):
-    client.mutation("messages:clearTableNew")
+    client.mutation("messages:clearTableNew", args=dict(insertSeed=True))
 
 def old_main(client: ConvexClient = ConvexClient(DEPLOYMENT_URL)):
     # Initialize the ConvexClient with the provided URL
@@ -172,13 +172,14 @@ def old_main(client: ConvexClient = ConvexClient(DEPLOYMENT_URL)):
 
 def test_function(client: ConvexClient):
     # get latest msg
-    msg = list_messages(client, lastN=5)[0]
+    msg = list_messages(client, lastN=10)[0]
     print(msg)
     if not msg:
         exit("WELP")
     ref_time = msg["_creationTime"]
     res = client.query("messages:getContextMessages", args=dict(refTime=ref_time))
     print(res)
+    client.mutation("messages:removeLast", args=dict(ids = res))
 
 def main():
     # Initialize the ConvexClient with the provided URL
@@ -216,8 +217,10 @@ def main():
 
 if __name__ == "__main__":
     client = ConvexClient(DEPLOYMENT_URL)
+    scan_incompletes(client)
+    main()
     # send_message(client, "Python pinger", "@gpt continue the story...", 5000)
-    replace_with_seed_file(client)
+    # test_function(client)
     
     # test_function(client)
     # old_main(client)
