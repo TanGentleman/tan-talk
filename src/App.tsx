@@ -28,7 +28,7 @@ export default function App() {
           key={message._id}
           className={message.author === NAME ? "message-mine" : ""}
         >
-          <div>{message.author}</div>
+          <div>{message.author} {message.complete ? "" : "(...)"}</div>
           <p>{message.body}</p>
         </article>
       ))}
