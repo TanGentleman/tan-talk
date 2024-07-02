@@ -4,7 +4,10 @@ import { query, internalQuery} from "./_generated/server";
 import { Doc, Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 
-const messagesInContext = 10;
+
+const messagesInContext = 5;
+const enableMagicStrings = true;
+
 
 export const list = query({
   handler: async (ctx): Promise<Doc<"messages">[]> => {
@@ -19,14 +22,18 @@ export const listN = query({
   args: { lastN: v.optional(v.number()) },
   handler: async (ctx, { lastN = 5}): Promise<Doc<"messages">[]> => {
     // Grab the last N messages.
-    const messages = await ctx.db.query("messages").order("desc").take(lastN);
+    const messages: Doc<"messages">[] = await ctx.db.query("messages").order("desc").take(lastN);
     // Reverse the list so that it's in chronological order.
     return messages.reverse();
   },
 });
 
 export const send = mutation({
-  args: { body: v.string(), author: v.string(), delay: v.optional(v.number())},
+  args: { 
+    body: v.string(), 
+    author: v.string(), 
+    delay: v.optional(v.number())
+  },
   handler: async (ctx, { body, author, delay }) => {
     const complete = true
     // Add user message to DB
@@ -36,28 +43,37 @@ export const send = mutation({
     if (author !== "TanAI" && body.indexOf("@gpt") !== -1) {
       // check for magic strings
       const magicStrings = ["*RESET*", "*DEL*", "*FIX*"];
-      for (const magicString of magicStrings) {
-        if (body.endsWith(magicString)) {
-          if (magicString === "*RESET*") {
-            // call internal.clearTable
-            await ctx.scheduler.runAfter(0, internal.messages.clearTable);
-            return;
+      if (enableMagicStrings) {
+        let foundMagicString = false;
+        for (const magicString of magicStrings) {
+          if (body.endsWith(magicString)) {
+            foundMagicString = true;
+            if (magicString === "*RESET*") {
+              // call internal.clearTable
+              await ctx.scheduler.runAfter(0, internal.messages.clearTable);
+              return;
+            }
+            if (magicString === "*DEL*") {
+              // if want to schedule, have to get message IDS first
+              await ctx.scheduler.runAfter(0, internal.messages.removeLastN, {});
+              return;
+            }
+            // Add more magic strings here
+            if (magicString === "*FIX*") {
+              // call internal.fixTable
+              await ctx.scheduler.runAfter(0, internal.messages.fixIncompletes);
+              const fixResponseString = "I'm right on it! Gimme a jiffy!";
+              await ctx.db.insert("messages", {
+                author: "TanAI",
+                body: fixResponseString,
+                complete: true
+              });
+              return;
+            }
           }
-          if (magicString === "*DEL*") {
-            // if want to schedule, have to get message IDS first
-            await ctx.scheduler.runAfter(0, internal.messages.removeLastN, {});
-            return;
-          }
-          // Add more magic strings here
-          if (magicString === "*FIX*") {
-            // call internal.fixTable
-            await ctx.scheduler.runAfter(0, internal.messages.fixIncompletes);
-            const fixResponseString = "All those responses will be patched up!";
-            await ctx.db.insert("messages", {
-              author: "TanAI",
-              body: fixResponseString,
-              complete: true
-            });
+          if (foundMagicString) {
+            // REMINDER THAT ABOVE SHOULD HAVE RETURNED
+            console.log("Error: Found magic string and should have returned");
             return;
           }
         }
@@ -186,32 +202,30 @@ export const scanIncompletes = mutation({
   handler: async (ctx) => {
     // Filter messages that are incomplete.
     const incompleteMessages = await ctx.db.query("messages")
-    .filter((q) => q.eq(q.field("complete"), false))
-    .collect()
+      .filter((q) => q.eq(q.field("complete"), false))
+      .collect();
     if (incompleteMessages.length === 0) {
       return 0;
     }
-    // const allMessages = await ctx.db.query("messages").collect();
-    // Fix TanAI authored messages with a body starting with "OpenAI call failed"
-    let count  = 0;
+    let count = 0;
     for (const message of incompleteMessages) {
-      if (
-        (message.body === '...' ||
-        message.body.startsWith("OpenAI call failed")) && message.author === "TanAI"
-      ) {
-        const newBody = "OpenAI call failed. The next *FIX* invocation will patch it!";
-        await ctx.db.patch(message._id, { body: newBody, complete: false });
-        count++;
-      }
-      else {
+      let newBody = "";
+      if (message.author === "TanAI") {
+        if (message.body === "...") {
+          newBody = "OpenAI call failed. The next *FIX* invocation will patch it!";
+        } else if (message.body.startsWith("OpenAI call failed")) {
+          newBody = message.body;
+        } else {
+          const errorText = "*Scan marked this with an incomplete flag!*";
+          newBody = `OpenAI call failed.\n${errorText}\n${message.body}`;
+        }
+      } else {
         const errorText = "*Scan marked this with an incomplete flag!*";
-        // fix this if else logic
-        const newBody = message.author === "TanAI" ? `OpenAI call failed.\n${errorText}\n${message.body}` : message.body + "\n\n" + errorText;
-        await ctx.db.patch(message._id, { body: newBody, complete: false });
-        count++;
+        newBody = `${message.body}\n\n${errorText}`;
       }
+      await ctx.db.patch(message._id, { body: newBody, complete: false });
+      count++;
     }
-    
     return count;
   },
 });
